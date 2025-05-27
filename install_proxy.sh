@@ -1,25 +1,35 @@
 #!/bin/bash
 
-# === 🔧 CẤU HÌNH TÙY CHỈNH ===
-PORT=8989  # ⚠️ Thay đổi port tại đây
-USERS=("anhcunhoi35:anhcunhoi35")  # ⚠️ Thêm/sửa user tại đây
+# ========== ⚙️ Cấu hình ==========
+PORT=8989
+USERS=("user1:pass1" "user2:pass2" "anhcunhoi35:anhcunhoi35")
 
-# === 🛠️ Cài đặt Dante SOCKS5 ===
-yum install epel-release -y
-yum install dante-server -y
+# ========== 🧱 Cài gói cần thiết ==========
+yum install -y gcc make pam-devel libtool automake curl tar iptables-services
 
-# Backup cấu hình cũ nếu có
-mv /etc/sockd.conf /etc/sockd.conf.bak 2>/dev/null
+# ========== ⬇️ Tải và biên dịch Dante ==========
+cd /tmp
+curl -O https://www.inet.no/dante/files/dante-1.4.2.tar.gz
+tar zxvf dante-1.4.2.tar.gz
+cd dante-1.4.2
+./configure
+make
+make install
 
-# Lấy tên interface mạng (ví dụ eth0)
+# ========== 🧑‍🔧 Tạo user đăng nhập ==========
+for i in "${USERS[@]}"; do
+  USERNAME=$(echo $i | cut -d':' -f1)
+  PASSWORD=$(echo $i | cut -d':' -f2)
+  useradd -M -s /sbin/nologin $USERNAME 2>/dev/null
+  echo "$USERNAME:$PASSWORD" | chpasswd
+done
+
+# ========== ⚙️ Tạo file cấu hình /etc/sockd.conf ==========
 IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
-
-# Ghi file cấu hình sockd.conf mới
 cat <<EOF > /etc/sockd.conf
 logoutput: /var/log/sockd.log
 internal: 0.0.0.0 port = $PORT
 external: $IFACE
-
 method: username
 user.notprivileged: nobody
 
@@ -36,27 +46,37 @@ pass {
 }
 EOF
 
-# === 👤 Tạo user proxy ===
-for i in "${USERS[@]}"; do
-  USERNAME=$(echo $i | cut -d':' -f1)
-  PASSWORD=$(echo $i | cut -d':' -f2)
-  useradd -M -s /sbin/nologin $USERNAME 2>/dev/null
-  echo "$USERNAME:$PASSWORD" | chpasswd
-done
+# ========== 🔧 Tạo service systemd ==========
+cat <<EOF > /etc/systemd/system/sockd.service
+[Unit]
+Description=Dante SOCKS5 Proxy Server
+After=network.target
 
-# === 🔓 Mở port firewall ===
-firewall-cmd --permanent --add-port=${PORT}/tcp
-firewall-cmd --reload
+[Service]
+ExecStart=/usr/local/sbin/sockd -f /etc/sockd.conf
+User=nobody
 
-# === ▶️ Khởi động dịch vụ ===
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# ========== 🔥 Mở port với iptables ==========
+iptables -I INPUT -p tcp --dport $PORT -j ACCEPT
+service iptables save
+systemctl enable iptables
+systemctl restart iptables
+
+# ========== 🚀 Khởi động Dante ==========
+systemctl daemon-reexec
+systemctl daemon-reload
 systemctl enable sockd
 systemctl restart sockd
 
-# === ✅ Hiển thị thông tin ===
-echo "✅ SOCKS5 Proxy đã sẵn sàng!"
-echo "➡ IP VPS của bạn: $(curl -s ifconfig.me)"
+# ========== ✅ Hoàn tất ==========
+echo -e "\n✅ SOCKS5 Proxy đã sẵn sàng!"
+echo "➡ IP VPS: $(curl -s ifconfig.me)"
 echo "➡ Port: $PORT"
-echo "➡ Danh sách user:"
+echo "➡ User đăng nhập:"
 for i in "${USERS[@]}"; do
   echo "   - $i"
 done
